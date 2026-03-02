@@ -2,21 +2,42 @@
 AI Service – calls OpenAI to turn the user prompt + document text
 into a structured presentation plan (list of slides with template IDs
 and content fields).
+
+When custom PPTX templates are available, the AI uses "progressive
+disclosure by skill" to select them:
+  1. The AI picks the most suitable custom template category.
+  2. Within that category, the AI picks a specific template.
+  3. The AI fills in the content for each slide.
 """
 from __future__ import annotations
 
 import json
 import os
 import re
+from typing import List
 
 from openai import AsyncOpenAI
 
 from services.template_registry import TEMPLATES
 
-_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+_client: AsyncOpenAI | None = None
+
+
+def _get_client() -> AsyncOpenAI:
+    global _client
+    if _client is None:
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "未配置 OPENAI_API_KEY。请在 .env 文件中或环境变量中设置你的 OpenAI API Key。"
+            )
+        _client = AsyncOpenAI(api_key=api_key)
+    return _client
+
+
 _MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 
-# ── Build the template catalogue description once ───────────────────────────
+# ── Build the built-in template catalogue description once ────────────────────
 _TEMPLATE_CATALOGUE = "\n\n".join(
     f"### {t['id']}\n"
     f"**名称**: {t['name']}\n"
@@ -25,7 +46,7 @@ _TEMPLATE_CATALOGUE = "\n\n".join(
     for t in TEMPLATES
 )
 
-_SYSTEM_PROMPT = f"""
+_BASE_SYSTEM_PROMPT = f"""
 你是一名专业的商业演示文稿设计师和内容策略师。
 你的任务是根据用户需求和参考资料，规划并生成一份高质量 PowerPoint 演示文稿的结构和内容。
 
@@ -61,26 +82,66 @@ _SYSTEM_PROMPT = f"""
 6. **只输出 JSON，不输出任何额外文字或 markdown 代码块标记**。
 """
 
+_CUSTOM_TEMPLATE_ADDENDUM = """
+## 自定义 PPT 模板（用户上传）
+
+用户已上传以下自定义模板，按分类组织，供你选择合适的视觉风格基础。
+请在 JSON 的顶层新增字段 `"selected_custom_template_id"` 填入最适合本次内容的模板 ID；
+如果没有合适的自定义模板，可以省略该字段或设为 null。
+
+**渐进式选择方式**：先根据内容确定最合适的**分类**，再从该分类中选择最合适的**具体模板**。
+
+{catalogue}
+"""
+
+
+def _build_custom_catalogue(custom_templates: List[dict]) -> str:
+    """Format custom templates grouped by category for the system prompt."""
+    by_category: dict[str, list[dict]] = {}
+    for t in custom_templates:
+        cat = t.get("category", "未分类")
+        by_category.setdefault(cat, []).append(t)
+
+    lines: list[str] = []
+    for cat, templates in sorted(by_category.items()):
+        lines.append(f"### 分类: {cat}")
+        for t in templates:
+            lines.append(
+                f"- **ID**: `{t['id']}`  "
+                f"**名称**: {t['name']}  "
+                f"**幻灯片数**: {t.get('slide_count', '?')}  "
+                f"**描述**: {t.get('description', '')}"
+            )
+        lines.append("")
+    return "\n".join(lines)
+
 
 async def generate_presentation_plan(
     user_prompt: str,
     document_text: str,
+    custom_templates: List[dict] | None = None,
 ) -> dict:
     """
     Call OpenAI and return the parsed presentation plan dict.
     Raises ValueError if the response cannot be parsed.
     """
+    system_prompt = _BASE_SYSTEM_PROMPT.strip()
+
+    if custom_templates:
+        catalogue = _build_custom_catalogue(custom_templates)
+        system_prompt += "\n\n" + _CUSTOM_TEMPLATE_ADDENDUM.format(catalogue=catalogue).strip()
+
     user_message = f"## 用户需求\n{user_prompt}"
     if document_text.strip():
         # Truncate to avoid hitting context limits
         truncated = document_text[:12000]
         user_message += f"\n\n## 参考资料\n{truncated}"
 
-    response = await _client.chat.completions.create(
+    response = await _get_client().chat.completions.create(
         model=_MODEL,
         response_format={"type": "json_object"},
         messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT.strip()},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
         ],
         temperature=0.7,
@@ -114,3 +175,4 @@ def _validate_plan(plan: dict) -> None:
             raise ValueError(
                 f"第 {i+1} 张幻灯片使用了未知模板: '{slide.get('template')}'"
             )
+
