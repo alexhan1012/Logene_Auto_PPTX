@@ -1,5 +1,5 @@
 """
-AI Service – calls OpenAI to turn the user prompt + document text
+AI Service – calls OpenAI or Aliyun Bailian to turn the user prompt + document text
 into a structured presentation plan (list of slides with template IDs
 and content fields).
 
