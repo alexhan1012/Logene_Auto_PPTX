@@ -1,5 +1,5 @@
 """
-AI Service – calls OpenAI to turn the user prompt + document text
+AI Service – calls OpenAI or Aliyun Bailian to turn the user prompt + document text
 into a structured presentation plan (list of slides with template IDs
 and content fields).
 """
@@ -13,8 +13,21 @@ from openai import AsyncOpenAI
 
 from services.template_registry import TEMPLATES
 
-_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+# ── Configure API provider ──────────────────────────────────────────
+_PROVIDER = os.getenv("AI_PROVIDER", "aliyun").lower()
+_API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
+
+if _PROVIDER == "aliyun":
+    _BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    _MODEL = os.getenv("OPENAI_MODEL", "qwen-long")
+else:
+    _BASE_URL = "https://api.openai.com/v1"
+    _MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+
+_client = AsyncOpenAI(
+    api_key=_API_KEY,
+    base_url=_BASE_URL,
+)
 
 # ── Build the template catalogue description once ───────────────────────────
 _TEMPLATE_CATALOGUE = "\n\n".join(
