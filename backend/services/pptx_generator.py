@@ -704,12 +704,26 @@ _RENDERERS = {
 
 # ── Public entry-point ────────────────────────────────────────────────────────
 
-def build_pptx(plan: dict) -> bytes:
+def build_pptx(plan: dict, base_template_path: str | None = None) -> bytes:
     """
     Render all slides defined in *plan* and return the raw .pptx bytes.
     Unknown template IDs fall back to a content_bullets slide.
+
+    If *base_template_path* is provided, the uploaded PPTX is used as the
+    visual base (its slide master / theme is inherited).
     """
-    prs = _new_prs()
+    if base_template_path:
+        prs = Presentation(base_template_path)
+        # Remove all existing slides so we start with a clean deck
+        # keeping the slide master / layouts from the template
+        xml_slides = prs.slides._sldIdLst  # noqa: SLF001
+        for slide_id in list(xml_slides):
+            xml_slides.remove(slide_id)
+        # Note: Accessing _sldIdLst directly because python-pptx has no public API
+        # for removing slides while preserving the slide master/layouts.
+        # This is fragile but intentional; revisit if python-pptx adds a public API.
+    else:
+        prs = _new_prs()
 
     for slide_def in plan.get("slides", []):
         template_id: str = slide_def.get("template", "content_bullets")
